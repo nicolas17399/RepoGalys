@@ -2,7 +2,13 @@
 import pandas as pd
 from django.shortcuts import render, redirect
 from .models import Producto
-from .forms import ExcelUploadForm, StockUploadForm, ReposicionUploadForm
+from .forms import ExcelUploadForm
+from io import BytesIO
+from django.http import HttpResponse, HttpResponseRedirect
+from django.contrib import messages
+import os
+import shutil
+from django.utils.timezone import now
 
 def subir_excel(request):
     if request.method == 'POST':
@@ -10,77 +16,63 @@ def subir_excel(request):
         if form.is_valid():
             archivo = request.FILES['archivo']
             df = pd.read_excel(archivo)
+            df.columns = df.columns.str.lower().str.strip()
+
+            if 'cliente_codigo' not in df.columns:
+                return HttpResponse("El archivo debe tener la columna 'cliente_codigo'", status=400)
 
             for _, row in df.iterrows():
-                cliente = str(row['cliente']).strip()
-                codigo = str(row['codigo']).strip()
-                descripcion = str(row['descripcion']).strip()
-                cantidad = int(row['cantidad_por_caja'])
+                cliente_codigo = str(row['cliente_codigo']).strip()
 
-                Producto.objects.update_or_create(
-                    cliente=cliente,
-                    codigo=codigo,
-                    defaults={
-                        'descripcion': descripcion,
-                        'cantidad_por_caja': cantidad
-                    }
+                producto, creado = Producto.objects.update_or_create(
+                    cliente_codigo=cliente_codigo,
+                    defaults={}
                 )
+
+                for columna in df.columns:
+                    if columna != 'cliente_codigo' and not pd.isna(row[columna]):
+                        setattr(producto, columna, row[columna])
+
+                producto.save()
+
             return redirect('subir_excel')
     else:
         form = ExcelUploadForm()
     return render(request, 'subir_excel.html', {'form': form})
 
-def subir_stock(request):
-    if request.method == 'POST':
-        form = StockUploadForm(request.POST, request.FILES)
-        if form.is_valid():
-            archivo = request.FILES['archivo']
-            cliente = form.cleaned_data['cliente']
-            df = pd.read_excel(archivo)
+def descargar_plantilla(request):
+    columnas = [
+        'cliente_codigo', 'stock_total', 'stock_carrusel', 'cliente', 'codigo', 'descripcion', 
+        'cantidad_por_caja', 'promedio_venta', 'promedio_sobredimensionado',
+        'cantidad_op', 'tipo_ubicacion', 'unidades_por_batea', 'cantidad_bateas',
+        'cantidad_max_bateas',  'psicofarmaco'
+    ]
+    df = pd.DataFrame(columns=columnas)
 
-            for _, row in df.iterrows():
-                codigo = str(row['codigo']).strip()
-                stock_total = int(row['stock_total'])
-                stock_carrusel = int(row['stock_carrusel'])
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
 
-                try:
-                    producto = Producto.objects.get(cliente=cliente, codigo=codigo)
-                    producto.stock_total = stock_total
-                    producto.stock_carrusel = stock_carrusel
-                    producto.save()
-                except Producto.DoesNotExist:
-                    pass
-            return redirect('subir_stock')
-    else:
-        form = StockUploadForm()
-    return render(request, 'subir_stock.html', {'form': form})
+    buffer.seek(0)
+    response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = 'attachment; filename=plantilla_RepoGalys.xlsx'
+    return response
 
-def subir_reposicion(request):
-    if request.method == 'POST':
-        form = ReposicionUploadForm(request.POST, request.FILES)
-        if form.is_valid():
-            archivo = request.FILES['archivo']
-            cliente = form.cleaned_data['cliente']
-            df = pd.read_excel(archivo)
+def inicio(request):
+    return render(request, 'inicio.html')
 
-            for _, row in df.iterrows():
-                codigo = str(row['codigo']).strip()
-                promedio = int(row['promedio_venta'])
-                tipo = str(row['tipo_ubicacion']).strip().lower()
-                unidades_batea = int(row['unidades_por_batea'])
+def crear_backup(request):
+    # Calcular la raíz del proyecto
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    origen = os.path.join(base_dir, 'db.sqlite3')
+    print("🎯 Ejecutando función crear_backup")
+    # Si la carpeta backups está en la raíz del proyecto, esta línea es correcta:
+    backup_dir = os.path.join(base_dir, 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
 
-                stock_max = ((promedio + unidades_batea - 1) // unidades_batea) * unidades_batea
+    timestamp = now().strftime("%Y%m%d_%H%M%S")
+    destino = os.path.join(backup_dir, f"backup_{timestamp}.sqlite3")
 
-                try:
-                    producto = Producto.objects.get(cliente=cliente, codigo=codigo)
-                    producto.promedio_venta = promedio
-                    producto.tipo_ubicacion = tipo
-                    producto.unidades_por_batea = unidades_batea
-                    producto.stock_max_carrusel = stock_max
-                    producto.save()
-                except Producto.DoesNotExist:
-                    pass
-            return redirect('subir_reposicion')
-    else:
-        form = ReposicionUploadForm()
-    return render(request, 'subir_reposicion.html', {'form': form})
+    shutil.copy(origen, destino)
+    messages.success(request, f"Copia de seguridad creada: backup_{timestamp}.sqlite3")
+    return HttpResponseRedirect('/')

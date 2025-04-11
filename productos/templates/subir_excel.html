@@ -6,11 +6,15 @@
   <title>Document</title>
 </head>
 <body>
-  </html><h2>Subir archivo Excel de productos</h2>
-  <form method="post" enctype="multipart/form-data">
+  <!-- subir_excel.html -->
+  <h2>Subir archivo Excel</h2>
+
+  <a href="{% url 'descargar_plantilla' %}" class="btn btn-outline-primary">📥 Descargar plantilla</a>
+
+  <form method="post" enctype="multipart/form-data" style="margin-top: 20px;">
     {% csrf_token %}
     {{ form.as_p }}
-    <button type="submit">Subir</button>
-  </form>
+    <button type="submit">Subir archivo</button>
+</form>
 </body>
 
