@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<h2>🛒 Armar Reposición Galys</h2>
+
+<form method="post">
+  {% csrf_token %}
+
+  <div style="display: flex; gap: 40px; flex-wrap: wrap; margin-bottom: 20px;">
+    <!-- Psicofármacos -->
+    <div>
+      <strong>Filtrar por psicofármaco:</strong><br>
+      <label><input type="radio" name="psicofarmaco" value="TODOS" {% if psicofarmaco == 'TODOS' or not psicofarmaco %}checked{% endif %}> Incluir todos</label><br>
+      <label><input type="radio" name="psicofarmaco" value="SI" {% if psicofarmaco == 'SI' %}checked{% endif %}> Solo psicofármacos</label><br>
+      <label><input type="radio" name="psicofarmaco" value="NO" {% if psicofarmaco == 'NO' %}checked{% endif %}> Excluir psicofármacos</label>
+    </div>
+
+    <!-- Días -->
+    <div>
+      <strong>Días de stock:</strong><br>
+      {% for d in dias_opciones %}
+        <label>
+          <input type="checkbox" name="dias" value="{{ d }}" {% if d in dias_seleccionados %}checked{% endif %}> {{ d }}
+        </label>
+      {% endfor %}
+    </div>
+
+    <!-- Alturas -->
+    <div>
+      <strong>Altura:</strong><br>
+      {% for alt in alturas_opciones %}
+        <label>
+          <input type="checkbox" name="alturas" value="{{ alt }}" {% if alt in alturas_seleccionadas %}checked{% endif %}> {{ alt }}
+        </label>
+      {% endfor %}
+    </div>
+
+    <!-- Clientes en 2 columnas -->
+    <div>
+      <strong>Filtrar por cliente:</strong><br>
+      <div style="display: flex; gap: 30px;">
+        <div>
+          {% for cliente in clientes_col1 %}
+            <label>
+              <input type="checkbox" name="clientes" value="{{ cliente }}" {% if cliente in clientes_seleccionados %}checked{% endif %}>
+              {{ cliente }}
+            </label><br>
+          {% endfor %}
+        </div>
+        <div>
+          {% for cliente in clientes_col2 %}
+            <label>
+              <input type="checkbox" name="clientes" value="{{ cliente }}" {% if cliente in clientes_seleccionados %}checked{% endif %}>
+              {{ cliente }}
+            </label><br>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Botones -->
+  <button type="submit" name="accion" value="mostrar">Mostrar</button>
+  <button type="submit" name="accion" value="descargar">Descargar Excel</button>
+</form>
+
+{% if resultados %}
+  <h4>{{ cantidad_productos }} productos encontrados. Total unidades: {{ cantidad_unidades }}</h4>
+  <table border="1" cellpadding="5" cellspacing="0">
+    <thead>
+      <tr>
+        <th>Cliente</th>
+        <th>Código</th>
+        <th>Cantidad a reponer</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fila in resultados %}
+        <tr>
+          <td>{{ fila.0 }}</td>
+          <td>{{ fila.1 }}</td>
+          <td>{{ fila.2 }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% load custom_tags %}
+{% block content %}
+
+<h2>Editar o crear producto manualmente</h2>
+
+<form method="post">
+  {% csrf_token %}
+  <label>Buscar por cliente_codigo:</label>
+  <input type="text" name="cliente_codigo" value="{{ valores.cliente_codigo|default_if_none:'' }}">
+  <button type="submit" name="buscar">🔍 Buscar</button>
+</form>
+
+{% if valores %}
+<hr>
+<form method="post">
+  {% csrf_token %}
+  {% for campo in campos %}
+    <label>{{ campo }}:</label>
+    <input type="text" name="{{ campo }}" value="{{ valores|get_item:campo|default_if_none:'' }}">
+    <br>
+  {% endfor %}
+  <button type="submit" name="guardar">💾 Guardar</button>
+</form>
+{% endif %}
+
+{% endblock %}

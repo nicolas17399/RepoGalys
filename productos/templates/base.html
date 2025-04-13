@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>RepoGalys</title>
+</head>
+<body style="font-family: Arial, sans-serif; margin: 40px;">
+
+    <h1 style="color: navy;">📦 RepoGalys</h1>
+
+    <nav>
+        <a href="{% url 'inicio' %}">🏠 Inicio</a> |
+        <a href="{% url 'subir_excel' %}">📄 Cargar productos</a> |
+        <a href="{% url 'subir_ubicaciones' %}">📦 Cargar ubicaciones</a> |
+        <a href="{% url 'editar_producto' %}">✏️ Editar producto</a> |
+        <a href="{% url 'crear_backup' %}">🛡️ Backup</a>
+    </nav>
+
+    <hr>
+
+    {% if messages %}
+        <ul>
+        {% for message in messages %}
+            <li style="color: green;">{{ message }}</li>
+        {% endfor %}
+        </ul>
+    {% endif %}
+
+    {% block content %}
+    {% endblock %}
+
+    <hr>
+    <footer style="font-size: 12px;">© 2025 RepoGalys - Todos los derechos reservados</footer>
+
+</body>
+</html>

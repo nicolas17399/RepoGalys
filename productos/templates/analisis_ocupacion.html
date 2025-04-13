@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load custom_tags %}
+
+{% block content %}
+<h2>📊 Distribución de ocupación por altura</h2>
+
+<!-- Mensajes -->
+{% if messages %}
+  <ul style="list-style: none; padding: 0;">
+    {% for message in messages %}
+      <li style="padding: 10px; margin-bottom: 10px; color: #856404; background-color: #fff3cd; border: 1px solid #ffeeba;">
+        ⚠️ {{ message }}
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<!-- Tabla -->
+<table border="1" cellpadding="5" cellspacing="0">
+  <thead>
+    <tr>
+      <th>Clasificación</th>
+      {% for columna in columnas %}
+        <th>{{ columna }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for etiqueta, fila in filas %}
+      <tr>
+        <td>{{ etiqueta }}</td>
+        {% for valor in fila %}
+          <td>{{ valor }}</td>
+        {% endfor %}
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top: 30px;">📊 Ocupación promedio por altura:</h3>
+<ul>
+  <li><strong>General:</strong> {{ promedios.General }}%</li>
+  <li><strong>Suelo:</strong> {{ promedios.Suelo }}%</li>
+  <li><strong>UDC170:</strong> {{ promedios.UDC170 }}%</li>
+  <li><strong>UDC320:</strong> {{ promedios.UDC320 }}%</li>
+</ul>
+
+<!-- Gráfico -->
+<canvas id="grafico_ocupacion" width="800" height="300"></canvas>
+
+<!-- Chart.js y plugin datalabels -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
+
+<script>
+  const ctx = document.getElementById('grafico_ocupacion').getContext('2d');
+
+  const etiquetas = {{ etiquetas|safe }};
+  const columnas = {{ columnas|safe }};
+  const datos = {{ datos_grafico|safe }};
+
+  const datasets = columnas.map((columna, index) => ({
+    label: columna,
+    data: datos.map(row => row[index]),
+    backgroundColor: ['#4dabf7', '#f783ac', '#ffa94d'][index % 3],
+    datalabels: {
+      anchor: 'end',
+      align: 'top',
+      color: '#000',
+      font: {
+        weight: 'bold'
+      }
+    }
+  }));
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: etiquetas,
+      datasets: datasets
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        datalabels: {
+          display: true,
+          formatter: Math.round
+        },
+        legend: {
+          position: 'top'
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            stepSize: 20
+          }
+        }
+      }
+    },
+    plugins: [ChartDataLabels]
+  });
+</script>
+{% endblock %}

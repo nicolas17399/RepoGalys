@@ -1,24 +1,17 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    <h1>Bienvenido a RepoGalys</h1>
+{% extends 'base.html' %}
+{% block content %}
 
-    <ul>
-      <li><a href="{% url 'subir_excel' %}">📄 Subir archivo Excel</a></li>
-      <li><a href="{% url 'crear_backup' %}">🛡️ Crear copia de seguridad</a></li>
-    </ul>
-    
-    {% if messages %}
-      <ul>
-        {% for message in messages %}
-          <li style="color: green;">{{ message }}</li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-</body>
-</html>
+<h2>Bienvenido al sistema RepoGalys</h2>
+
+<p>Seleccioná una opción para comenzar:</p>
+
+<ul>
+  <li><a href="{% url 'subir_excel' %}">📄 Cargar productos por Excel</a></li>
+  <li><a href="{% url 'editar_producto' %}">✏️ Editar un producto manualmente</a></li>
+  <li><a href="{% url 'subir_ubicaciones' %}">📦 Cargar ubicaciones del carrusel</a></li>
+  <li><a href="{% url 'analisis_ocupacion' %}">📊 Análisis de ocupación por altura</a></li>
+  <li><a href="{% url 'armar_reposicion' %}">📦 Armar reposición Galys</a></li>
+  <li><a href="{% url 'crear_backup' %}">🛡️ Crear copia de seguridad</a></li>
+</ul>
+
+{% endblock %}
