@@ -20,9 +20,7 @@
     <div>
       <strong>Días de stock:</strong><br>
       {% for d in dias_opciones %}
-        <label>
-          <input type="checkbox" name="dias" value="{{ d }}" {% if d in dias_seleccionados %}checked{% endif %}> {{ d }}
-        </label>
+        <label><input type="checkbox" name="dias" value="{{ d }}" {% if d in dias_seleccionados %}checked{% endif %}> {{ d }}</label>
       {% endfor %}
     </div>
 
@@ -30,33 +28,34 @@
     <div>
       <strong>Altura:</strong><br>
       {% for alt in alturas_opciones %}
-        <label>
-          <input type="checkbox" name="alturas" value="{{ alt }}" {% if alt in alturas_seleccionadas %}checked{% endif %}> {{ alt }}
-        </label>
+        <label><input type="checkbox" name="alturas" value="{{ alt }}" {% if alt in alturas_seleccionadas %}checked{% endif %}> {{ alt }}</label>
       {% endfor %}
     </div>
 
-    <!-- Clientes en 2 columnas -->
+    <!-- Clientes -->
     <div>
       <strong>Filtrar por cliente:</strong><br>
-      <div style="display: flex; gap: 30px;">
-        <div>
-          {% for cliente in clientes_col1 %}
-            <label>
-              <input type="checkbox" name="clientes" value="{{ cliente }}" {% if cliente in clientes_seleccionados %}checked{% endif %}>
-              {{ cliente }}
-            </label><br>
-          {% endfor %}
-        </div>
-        <div>
-          {% for cliente in clientes_col2 %}
-            <label>
-              <input type="checkbox" name="clientes" value="{{ cliente }}" {% if cliente in clientes_seleccionados %}checked{% endif %}>
-              {{ cliente }}
-            </label><br>
-          {% endfor %}
-        </div>
-      </div>
+      {% for cliente in clientes_opciones %}
+        <label>
+          <input type="checkbox" name="clientes" value="{{ cliente }}" {% if cliente in clientes_seleccionados %}checked{% endif %}>
+          {{ cliente }}
+        </label><br>
+      {% endfor %}
+    </div>
+    <!-- Filtro ocupación mínima -->
+    <div>
+      <strong>Ocupación mínima aceptada:</strong><br>
+      <label><input type="radio" name="min_ocupacion" value="75" {% if min_ocupacion == '75' %}checked{% endif %}> 75%</label><br>
+      <label><input type="radio" name="min_ocupacion" value="50" {% if min_ocupacion == '50' %}checked{% endif %}> 50%</label><br>
+      <label><input type="radio" name="min_ocupacion" value="25" {% if min_ocupacion == '25' %}checked{% endif %}> 25%</label><br>
+      <label><input type="radio" name="min_ocupacion" value="otro" {% if min_ocupacion_otro %}checked{% endif %}> Otro:</label>
+      <input type="number" name="min_ocupacion_otro" value="{{ min_ocupacion_otro|default_if_none:'' }}" min="1" max="100">
+    </div>
+    <!-- Método de cálculo de ocupación -->
+    <div>
+      <strong>Método de cálculo de ocupación:</strong><br>
+      <label><input type="radio" name="metodo_ocupacion" value="simple" {% if metodo_ocupacion == 'simple' or not metodo_ocupacion %}checked{% endif %}> Estimado (sin ubicaciones)</label><br>
+      <label><input type="radio" name="metodo_ocupacion" value="ubicaciones" {% if metodo_ocupacion == 'ubicaciones' %}checked{% endif %}> Preciso (con ubicaciones)</label>
     </div>
   </div>
 
@@ -66,13 +65,21 @@
 </form>
 
 {% if resultados %}
-  <h4>{{ cantidad_productos }} productos encontrados. Total unidades: {{ cantidad_unidades }}</h4>
+  <h4>
+    {{ cantidad_productos }} productos encontrados.
+    Total unidades: {{ cantidad_unidades }}.
+    Bateas necesarias → Suelo: {{ bateas_necesarias.Suelo|default:"0" }},
+    UDC170: {{ bateas_necesarias.UDC170|default:"0" }},
+    UDC320: {{ bateas_necesarias.UDC320|default:"0" }}.
+    Promedio de ocupación: {{ promedio_ocupacion }}%
+  </h4>
   <table border="1" cellpadding="5" cellspacing="0">
     <thead>
       <tr>
         <th>Cliente</th>
         <th>Código</th>
         <th>Cantidad a reponer</th>
+        <th>% Ocupación</th>
       </tr>
     </thead>
     <tbody>
@@ -81,6 +88,7 @@
           <td>{{ fila.0 }}</td>
           <td>{{ fila.1 }}</td>
           <td>{{ fila.2 }}</td>
+          <td>{{ fila.3 }}%</td>
         </tr>
       {% endfor %}
     </tbody>

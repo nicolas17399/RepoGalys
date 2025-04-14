@@ -11,9 +11,9 @@ import shutil
 from django.utils.timezone import now
 from django.db.models import Count
 from django.utils.safestring import mark_safe
-from math import ceil
+import math
 from openpyxl import Workbook
-from collections import Counter
+from collections import Counter, defaultdict
 
 def subir_excel(request):
     if request.method == 'POST':
@@ -329,23 +329,16 @@ def analisis_ocupacion(request):
     contexto['promedios'] = promedios
     return render(request, 'analisis_ocupacion.html', contexto)
 
+def calcular_bateas_requeridas(stock_carrusel, cantidad_a_reponer, unidades_por_batea):
+    total_esperado = stock_carrusel + cantidad_a_reponer
+    bateas_totales = math.ceil(total_esperado / unidades_por_batea) if unidades_por_batea else 0
+    bateas_actuales = math.ceil(stock_carrusel / unidades_por_batea) if unidades_por_batea else 0
+    return max(bateas_totales - bateas_actuales, 0)
+
 def armar_reposicion(request):
-    productos = Producto.objects.exclude(cliente__isnull=True).exclude(cliente="")
-
-    # Variables de selección por defecto
-    dias_opciones = [0, 1, 2, 3, 4, 5]
-    alturas_opciones = ["SUELO", "UDC170", "UDC320"]
-    clientes_opciones = sorted(productos.values_list('cliente', flat=True).distinct())
-
-    dias_seleccionados = []
-    alturas_seleccionadas = []
-    clientes_seleccionados = []
-    filtro_psico = 'TODOS'
-    datos = []
-    total_unidades = 0
+    productos = Producto.objects.exclude(cliente__isnull=True).exclude(cliente='')
 
     if request.method == 'POST':
-        # Filtros
         filtro_psico = request.POST.get('psicofarmaco')
         if filtro_psico == 'SI':
             productos = productos.filter(psicofarmaco='SI')
@@ -354,20 +347,36 @@ def armar_reposicion(request):
 
         dias_seleccionados = [int(d) for d in request.POST.getlist('dias')]
         alturas_seleccionadas = request.POST.getlist('alturas')
-        clientes_seleccionados = request.POST.getlist('clientes')
-
         if alturas_seleccionadas:
             productos = productos.filter(tipo_ubicacion__in=alturas_seleccionadas)
 
+        clientes_seleccionados = request.POST.getlist('clientes')
         if clientes_seleccionados:
             productos = productos.filter(cliente__in=clientes_seleccionados)
 
-        # Cálculo de reposición
+        metodo_ocupacion = request.POST.get('metodo_ocupacion', 'simple')
+
+        # Porcentaje mínimo
+        porcentaje_opciones = ['75', '50', '25']
+        porcentaje_minimo = request.POST.get('min_ocupacion')
+        if porcentaje_minimo == 'otro':
+            porcentaje_minimo_valor = request.POST.get('min_ocupacion_otro')
+            try:
+                porcentaje_minimo = float(porcentaje_minimo_valor)
+            except:
+                porcentaje_minimo = 0
+        elif porcentaje_minimo in porcentaje_opciones:
+            porcentaje_minimo = float(porcentaje_minimo)
+        else:
+            porcentaje_minimo = 0
+
+        resultados = []
+        batea_contador = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
+
         for p in productos:
             try:
                 unidades_dia = p.promedio_sobredimensionado / 5 if p.promedio_sobredimensionado else 0
                 dias_stock = round(p.stock_carrusel / unidades_dia) if unidades_dia else 0
-
                 if dias_stock not in dias_seleccionados:
                     continue
 
@@ -377,40 +386,144 @@ def armar_reposicion(request):
                     faltante = p.stock_max_carrusel - p.stock_carrusel
                     cantidad = ((-(-faltante // p.cantidad_por_caja)) * p.cantidad_por_caja) if p.cantidad_por_caja else 0
 
-                if cantidad > 0:
-                    datos.append((p.cliente, p.codigo, cantidad))
+                if cantidad <= 0:
+                    continue
+
+                if metodo_ocupacion == 'ubicaciones':
+                    porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad)
+                else:
+                    porcentaje = calcular_ocupacion_simple(p, cantidad)
+
+                if porcentaje < porcentaje_minimo:
+                    cantidad_alternativa = cantidad - p.cantidad_por_caja if p.cantidad_por_caja else cantidad
+                    if cantidad_alternativa > 0:
+                        nuevo_porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad_alternativa) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad_alternativa)
+                        if nuevo_porcentaje > porcentaje:
+                            cantidad = cantidad_alternativa
+                            porcentaje = nuevo_porcentaje
+
+                tipo_altura = p.tipo_ubicacion
+                bateas_usadas = 0
+                if p.unidades_por_batea:
+                    restante = p.stock_max_carrusel - p.stock_carrusel
+                    cantidad_final = min(cantidad, restante)
+                    bateas_usadas = math.ceil(cantidad_final / p.unidades_por_batea)
+
+                if bateas_usadas > 0 and tipo_altura in batea_contador:
+                    batea_contador[tipo_altura] += bateas_usadas
+
+                resultados.append((p.cliente, p.codigo, cantidad, round(porcentaje)))
             except:
                 continue
-
-        total_unidades = sum([fila[2] for fila in datos])
+            
+        promedio_ocupacion = round(sum([r[3] for r in resultados]) / len(resultados), 1) if resultados else 0
 
         if request.POST.get('accion') == 'descargar':
             wb = Workbook()
             ws = wb.active
             ws.append(['Cliente', 'Código', 'Cantidad a reponer'])
-            for fila in datos:
-                ws.append(fila)
+            for fila in resultados:
+                ws.append(fila[:3])
 
             response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             response['Content-Disposition'] = 'attachment; filename="reposicion_galys.xlsx"'
             wb.save(response)
             return response
 
-    # Separar clientes en 2 columnas
-    mitad = len(clientes_opciones) // 2
-    clientes_col1 = clientes_opciones[:mitad]
-    clientes_col2 = clientes_opciones[mitad:]
+        dias_opciones = [0, 1, 2, 3, 4, 5]
+        alturas_opciones = ["Suelo", "UDC170", "UDC320"]
+        clientes_opciones = list(Producto.objects.exclude(cliente__isnull=True).exclude(cliente='').values_list('cliente', flat=True).distinct().order_by('cliente'))
+
+        return render(request, 'armar_reposicion.html', {
+            'resultados': resultados,
+            'dias_opciones': dias_opciones,
+            'alturas_opciones': alturas_opciones,
+            'clientes_opciones': clientes_opciones,
+            'dias_seleccionados': dias_seleccionados,
+            'alturas_seleccionadas': alturas_seleccionadas,
+            'clientes_seleccionados': clientes_seleccionados,
+            'psicofarmaco': filtro_psico,
+            'cantidad_productos': len(resultados),
+            'cantidad_unidades': sum([r[2] for r in resultados]),
+            'bateas_necesarias': batea_contador,
+            'porcentaje_minimo': porcentaje_minimo,
+            'min_ocupacion': request.POST.get('min_ocupacion', '75'),
+            'min_ocupacion_otro': request.POST.get('min_ocupacion_otro', ''),
+            'metodo_ocupacion': metodo_ocupacion,
+            'promedio_ocupacion': promedio_ocupacion,
+        })
+
+    dias_opciones = [0, 1, 2, 3, 4, 5]
+    alturas_opciones = ["Suelo", "UDC170", "UDC320"]
+    clientes_opciones = list(Producto.objects.exclude(cliente__isnull=True).exclude(cliente='').values_list('cliente', flat=True).distinct().order_by('cliente'))
 
     return render(request, 'armar_reposicion.html', {
-        'resultados': datos,
         'dias_opciones': dias_opciones,
         'alturas_opciones': alturas_opciones,
-        'clientes_col1': clientes_col1,
-        'clientes_col2': clientes_col2,
-        'clientes_seleccionados': clientes_seleccionados,
-        'dias_seleccionados': dias_seleccionados,
-        'alturas_seleccionadas': alturas_seleccionadas,
-        'psicofarmaco': filtro_psico,
-        'cantidad_productos': len(datos),
-        'cantidad_unidades': total_unidades
+        'clientes_opciones': clientes_opciones,
+        'dias_seleccionados': [],
+        'alturas_seleccionadas': [],
+        'clientes_seleccionados': [],
+        'psicofarmaco': 'TODOS',
+        'porcentaje_minimo': 0,
+        'min_ocupacion': '75',
+        'min_ocupacion_otro': '',
+        'metodo_ocupacion': 'simple',
     })
+
+
+def calcular_ocupacion_simple(p, cantidad):
+    """
+    Método estimado: calcula el porcentaje de ocupación de la última batea
+    estimando con stock + cantidad / unidades_por_batea.
+    """
+    if not p.unidades_por_batea:
+        return 0
+
+    total = p.stock_carrusel + cantidad
+    resto = total % p.unidades_por_batea
+
+    if resto == 0 and total > 0:
+        return 100
+    else:
+        return round((resto / p.unidades_por_batea) * 100, 2)
+
+
+def calcular_ocupacion_con_ubicaciones(p, cantidad, ubicaciones):
+    """
+    Método preciso: analiza las ubicaciones reales del producto
+    y simula la carga real para calcular ocupación de la última batea.
+    """
+    articulo = f"{p.cliente}-{p.codigo}"
+    ubicaciones_producto = [u for u in ubicaciones if u.articulo == articulo]
+
+    if not ubicaciones_producto or not p.unidades_por_batea:
+        return calcular_ocupacion_simple(p, cantidad)
+
+    # Ordenar por stock descendente (opcional)
+    ubicaciones_producto.sort(key=lambda u: u.stock, reverse=True)
+
+    cantidad_restante = cantidad
+    ultima_ocupacion = 0
+
+    for u in ubicaciones_producto:
+        espacio_libre = u.uds_udc - u.stock
+        if espacio_libre <= 0:
+            continue
+
+        asignar = min(cantidad_restante, espacio_libre)
+        cantidad_restante -= asignar
+
+        ocupacion = (u.stock + asignar) / u.uds_udc * 100
+        ultima_ocupacion = round(ocupacion, 2)
+
+        if cantidad_restante <= 0:
+            break
+
+    # Si quedó cantidad sin asignar, va a una batea nueva vacía
+    if cantidad_restante > 0:
+        ocupacion_extra = (cantidad_restante / p.unidades_por_batea) * 100
+        ultima_ocupacion = round(ocupacion_extra, 2)
+
+    return ultima_ocupacion
+

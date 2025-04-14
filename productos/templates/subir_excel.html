@@ -8,5 +8,7 @@
   {{ form.as_p }}
   <button type="submit">📤 Subir archivo</button>
 </form>
-
+<a href="{% url 'descargar_plantilla' %}" class="btn btn-outline-primary">
+  📥 Descargar plantilla
+</a>
 {% endblock %}
