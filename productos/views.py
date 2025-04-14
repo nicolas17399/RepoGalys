@@ -415,7 +415,7 @@ def armar_reposicion(request):
                 resultados.append((p.cliente, p.codigo, cantidad, round(porcentaje)))
             except:
                 continue
-            
+
         promedio_ocupacion = round(sum([r[3] for r in resultados]) / len(resultados), 1) if resultados else 0
 
         if request.POST.get('accion') == 'descargar':
@@ -527,3 +527,52 @@ def calcular_ocupacion_con_ubicaciones(p, cantidad, ubicaciones):
 
     return ultima_ocupacion
 
+def reposicion_desde_excel(request):
+    resultados = []
+
+    if request.method == 'POST' and request.FILES.get('archivo'):
+        archivo = request.FILES['archivo']
+
+        try:
+            df = pd.read_excel(archivo)
+        except Exception as e:
+            return render(request, 'reposicion_desde_excel.html', {
+                'error': f"Error al leer el archivo: {e}"
+            })
+
+        # Convertir nombres de columnas a string (por si acaso)
+        df.columns = df.columns.map(str)
+
+        for _, fila in df.iterrows():
+            try:
+                cliente = str(fila['cliente']).strip()
+                codigo = str(fila['codigo']).strip()
+                cantidad_pedida = int(fila['cantidad'])
+
+                producto = Producto.objects.filter(cliente=cliente, codigo=codigo).first()
+                if not producto or not producto.cantidad_por_caja:
+                    continue
+
+                und_sueltas = cantidad_pedida % producto.cantidad_por_caja
+                if und_sueltas > 0:
+                    resultados.append((cliente, codigo, und_sueltas))
+
+            except Exception as e:
+                continue
+
+        # Si el usuario quiere descargar Excel
+        if 'descargar' in request.POST:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(['Cliente', 'Código', 'Unidades a reponer'])
+            for fila in resultados:
+                ws.append(fila)
+
+            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            response['Content-Disposition'] = 'attachment; filename="reposicion_carrusel.xlsx"'
+            wb.save(response)
+            return response
+
+    return render(request, 'reposicion_desde_excel.html', {
+        'resultados': resultados
+    })

@@ -11,5 +11,6 @@ urlpatterns = [
     path('subir_ubicaciones/', views.subir_ubicaciones, name='subir_ubicaciones'),
     path('analisis_ocupacion/', views.analisis_ocupacion, name='analisis_ocupacion'),
     path('armar_reposicion/', views.armar_reposicion, name='armar_reposicion'),
+    path('reposicion_reactiva/', views.reposicion_reactiva, name='reposicion_reactiva'),
 ]
 

@@ -95,3 +95,10 @@ class UbicacionCarrusel(models.Model):
             return 9
         else:
             return 10
+class PedidoTemporal(models.Model):
+    cliente = models.CharField(max_length=100)
+    codigo = models.CharField(max_length=100)
+    cantidad = models.PositiveIntegerField()
+
+    def __str__(self):
+        return f"{self.cliente} - {self.codigo} - {self.cantidad}"

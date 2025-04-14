@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<h2>📦 Reposición desde archivo de pedidos</h2>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <p>Seleccioná el archivo de pedidos (Excel):</p>
+  <input type="file" name="archivo" required>
+  <br><br>
+  <button type="submit">📥 Procesar archivo</button>
+</form>
+
+{% if resultados %}
+  <hr>
+  <h4>{{ resultados|length }} productos con unidades sueltas para reponer en carrusel</h4>
+  <table border="1" cellpadding="5" cellspacing="0">
+    <thead>
+      <tr>
+        <th>Cliente</th>
+        <th>Código</th>
+        <th>Unidades a reponer</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fila in resultados %}
+        <tr>
+          <td>{{ fila.0 }}</td>
+          <td>{{ fila.1 }}</td>
+          <td>{{ fila.2 }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+{% endblock %}
