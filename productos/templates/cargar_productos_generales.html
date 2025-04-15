@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<h2>📁 Cargar archivo con productos generales</h2>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <label for="archivo">Selecciona un archivo Excel (.xlsx):</label><br><br>
+  <input type="file" name="archivo" accept=".xlsx" required><br><br>
+  <button type="submit">📤 Subir archivo</button>
+</form>
+
+{% if mensajes %}
+  <ul style="margin-top: 20px; color: green;">
+    {% for msg in mensajes %}
+      <li>{{ msg }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<a href="{% url 'inicio' %}">⬅️ Volver al inicio</a>
+{% endblock %}

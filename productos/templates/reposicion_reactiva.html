@@ -2,25 +2,33 @@
 {% load static %}
 
 {% block content %}
-<h2>📦 Reposición desde archivo de pedidos</h2>
+<h2>📦 Reposición Reactiva desde Excel</h2>
 
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
   <p>Seleccioná el archivo de pedidos (Excel):</p>
-  <input type="file" name="archivo" required>
+  <input type="file" name="archivo" accept=".xlsx,.xls" required>
   <br><br>
-  <button type="submit">📥 Procesar archivo</button>
+  <button type="submit">Procesar archivo</button>
 </form>
 
+{% if errores %}
+  <h3 style="color: red;">Códigos sin información suficiente:</h3>
+  <ul>
+    {% for error in errores %}
+      <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
 {% if resultados %}
-  <hr>
-  <h4>{{ resultados|length }} productos con unidades sueltas para reponer en carrusel</h4>
+  <h3>Productos para reponer en carrusel:</h3>
   <table border="1" cellpadding="5" cellspacing="0">
     <thead>
       <tr>
         <th>Cliente</th>
         <th>Código</th>
-        <th>Unidades a reponer</th>
+        <th>Unidades sueltas</th>
       </tr>
     </thead>
     <tbody>
@@ -34,5 +42,4 @@
     </tbody>
   </table>
 {% endif %}
-
 {% endblock %}

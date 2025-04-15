@@ -1,7 +1,7 @@
 
 import pandas as pd
 from django.shortcuts import render, redirect
-from .models import Producto, UbicacionCarrusel
+from .models import Producto, UbicacionCarrusel, ProductoGeneral
 from .forms import ExcelUploadForm, ExcelUbicacionesForm
 from io import BytesIO
 from django.http import HttpResponse, HttpResponseRedirect
@@ -12,7 +12,7 @@ from django.utils.timezone import now
 from django.db.models import Count
 from django.utils.safestring import mark_safe
 import math
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from collections import Counter, defaultdict
 
 def subir_excel(request):
@@ -527,40 +527,51 @@ def calcular_ocupacion_con_ubicaciones(p, cantidad, ubicaciones):
 
     return ultima_ocupacion
 
-def reposicion_desde_excel(request):
+def reposicion_reactiva(request):
+    codigos_sin_info = []
     resultados = []
 
     if request.method == 'POST' and request.FILES.get('archivo'):
         archivo = request.FILES['archivo']
+        wb = load_workbook(archivo)
+        ws = wb.active
 
-        try:
-            df = pd.read_excel(archivo)
-        except Exception as e:
-            return render(request, 'reposicion_desde_excel.html', {
-                'error': f"Error al leer el archivo: {e}"
-            })
+        encabezados = {cell.value: idx for idx, cell in enumerate(ws[1])}
 
-        # Convertir nombres de columnas a string (por si acaso)
-        df.columns = df.columns.map(str)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            cliente = str(row[encabezados.get('cliente')]).strip()
+            codigo = str(row[encabezados.get('codigo')]).strip()
+            cantidad_pedida = row[encabezados.get('cantidad')]
 
-        for _, fila in df.iterrows():
-            try:
-                cliente = str(fila['cliente']).strip()
-                codigo = str(fila['codigo']).strip()
-                cantidad_pedida = int(fila['cantidad'])
-
-                producto = Producto.objects.filter(cliente=cliente, codigo=codigo).first()
-                if not producto or not producto.cantidad_por_caja:
-                    continue
-
-                und_sueltas = cantidad_pedida % producto.cantidad_por_caja
-                if und_sueltas > 0:
-                    resultados.append((cliente, codigo, und_sueltas))
-
-            except Exception as e:
+            if not cliente or not codigo or not cantidad_pedida:
                 continue
 
-        # Si el usuario quiere descargar Excel
+            try:
+                producto = Producto.objects.get(cliente=cliente, codigo=codigo)
+                cantidad_caja = producto.cantidad_por_caja
+            except Producto.DoesNotExist:
+                # Buscar en la tabla de productos generales
+                try:
+                    producto_general = ProductoGeneral.objects.get(cliente=cliente, codigo=codigo)
+                    cantidad_caja = producto_general.cantidad_por_caja
+                    creado_en_galys = producto_general.galys
+                    if not creado_en_galys:
+                        codigos_sin_info.append((cliente, codigo, 'No creado en Galys'))
+                        continue
+                except ProductoGeneral.DoesNotExist:
+                    codigos_sin_info.append((cliente, codigo, 'No encontrado en ninguna tabla'))
+                    continue
+
+            if not cantidad_caja:
+                codigos_sin_info.append((cliente, codigo, 'Sin cantidad por caja'))
+                continue
+
+            # Calcular unidades sueltas (lo que no es múltiplo de la caja)
+            unidades_sueltas = cantidad_pedida % cantidad_caja
+
+            if unidades_sueltas > 0:
+                resultados.append((cliente, codigo, unidades_sueltas))
+
         if 'descargar' in request.POST:
             wb = Workbook()
             ws = wb.active
@@ -569,10 +580,37 @@ def reposicion_desde_excel(request):
                 ws.append(fila)
 
             response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            response['Content-Disposition'] = 'attachment; filename="reposicion_carrusel.xlsx"'
+            response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
             wb.save(response)
             return response
 
-    return render(request, 'reposicion_desde_excel.html', {
-        'resultados': resultados
+    return render(request, 'reposicion_reactiva.html', {
+        'resultados': resultados,
+        'codigos_sin_info': codigos_sin_info
     })
+
+def cargar_productos_generales(request):
+    if request.method == 'POST' and request.FILES.get('archivo'):
+        archivo = request.FILES['archivo']
+        df = pd.read_excel(archivo)
+
+        for _, row in df.iterrows():
+            cliente = str(row.get('ProCliCodigo')).strip()
+            codigo = str(row.get('ProCodigo')).strip()
+            galys = str(row.get('ProGalys')).strip().upper() == 'VERDADERO'
+            cantidad_caja = row.get('ProPacking')
+
+            if cliente and codigo:
+                ProductoGeneral.objects.update_or_create(
+                    cliente=cliente,
+                    codigo=codigo,
+                    defaults={
+                        'galys': galys,
+                        'cantidad_por_caja': cantidad_caja if pd.notnull(cantidad_caja) else None,
+                    }
+                )
+
+        messages.success(request, "Archivo cargado correctamente.")
+        return redirect('inicio')
+
+    return render(request, 'cargar_productos_generales.html')

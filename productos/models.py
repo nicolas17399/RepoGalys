@@ -95,10 +95,24 @@ class UbicacionCarrusel(models.Model):
             return 9
         else:
             return 10
+        
 class PedidoTemporal(models.Model):
     cliente = models.CharField(max_length=100)
     codigo = models.CharField(max_length=100)
-    cantidad = models.PositiveIntegerField()
+    lote = models.CharField(max_length=100, blank=True, null=True)
+    cantidad = models.IntegerField()
 
     def __str__(self):
         return f"{self.cliente} - {self.codigo} - {self.cantidad}"
+
+class ProductoGeneral(models.Model):
+    cliente = models.CharField(max_length=100)
+    codigo = models.CharField(max_length=100)
+    galys = models.BooleanField(default=False)
+    cantidad_por_caja = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('cliente', 'codigo')
+
+    def __str__(self):
+        return f"{self.cliente} - {self.codigo}"
