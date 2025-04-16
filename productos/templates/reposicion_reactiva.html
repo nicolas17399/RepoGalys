@@ -2,33 +2,40 @@
 {% load static %}
 
 {% block content %}
-<h2>📦 Reposición Reactiva desde Excel</h2>
+<h2>⚙️ Reposición Reactiva desde Excel</h2>
 
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
-  <p>Seleccioná el archivo de pedidos (Excel):</p>
-  <input type="file" name="archivo" accept=".xlsx,.xls" required>
+  <label for="archivo">Seleccionar archivo de pedidos (.xlsx):</label>
+  <input type="file" name="archivo" required>
   <br><br>
-  <button type="submit">Procesar archivo</button>
+  <button type="submit" name="accion" value="mostrar">Mostrar</button>
+  <button type="submit" name="accion" value="descargar">Descargar Excel</button>
 </form>
 
-{% if errores %}
-  <h3 style="color: red;">Códigos sin información suficiente:</h3>
+{% if resumen %}
+  <h4>📊 Resumen</h4>
   <ul>
-    {% for error in errores %}
-      <li>{{ error }}</li>
-    {% endfor %}
+    <li><strong>Total de productos:</strong> {{ resumen.total_productos }}</li>
+    <li><strong>Total de unidades:</strong> {{ resumen.total_unidades }}</li>
+    <li><strong>Bateas necesarias:</strong>
+      Suelo: {{ resumen.bateas.Suelo|default:"0" }},
+      UDC170: {{ resumen.bateas.UDC170|default:"0" }},
+      UDC320: {{ resumen.bateas.UDC320|default:"0" }}
+    </li>
+    <li><strong>Porcentaje promedio de ocupación estimado:</strong> {{ resumen.porcentaje_ocupacion }}%</li>
   </ul>
 {% endif %}
 
 {% if resultados %}
-  <h3>Productos para reponer en carrusel:</h3>
+  <h4>📋 Detalles de la reposición sugerida</h4>
   <table border="1" cellpadding="5" cellspacing="0">
     <thead>
       <tr>
         <th>Cliente</th>
         <th>Código</th>
-        <th>Unidades sueltas</th>
+        <th>Cantidad a reponer</th>
+        <th>Lote</th>
       </tr>
     </thead>
     <tbody>
@@ -37,6 +44,7 @@
           <td>{{ fila.0 }}</td>
           <td>{{ fila.1 }}</td>
           <td>{{ fila.2 }}</td>
+          <td>{{ fila.3 }}</td>
         </tr>
       {% endfor %}
     </tbody>

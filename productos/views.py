@@ -1,7 +1,7 @@
 
 import pandas as pd
 from django.shortcuts import render, redirect
-from .models import Producto, UbicacionCarrusel, ProductoGeneral
+from .models import Producto, UbicacionCarrusel, ProductoGeneral,PedidoTemporal
 from .forms import ExcelUploadForm, ExcelUbicacionesForm
 from io import BytesIO
 from django.http import HttpResponse, HttpResponseRedirect
@@ -14,6 +14,7 @@ from django.utils.safestring import mark_safe
 import math
 from openpyxl import Workbook, load_workbook
 from collections import Counter, defaultdict
+import openpyxl
 
 def subir_excel(request):
     if request.method == 'POST':
@@ -528,65 +529,107 @@ def calcular_ocupacion_con_ubicaciones(p, cantidad, ubicaciones):
     return ultima_ocupacion
 
 def reposicion_reactiva(request):
-    codigos_sin_info = []
     resultados = []
+    total_unidades = 0
+    bateas_necesarias = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
+    porcentaje_total = 0
+    porcentaje_promedio = 0
 
-    if request.method == 'POST' and request.FILES.get('archivo'):
-        archivo = request.FILES['archivo']
-        wb = load_workbook(archivo)
+    if request.method == 'POST':
+        archivo = request.FILES.get('archivo')
+        accion = request.POST.get('accion')
+
+        if not archivo:
+            messages.error(request, "No se seleccionó un archivo.")
+            return redirect('reposicion_reactiva')
+
+        wb = load_workbook(filename=archivo, data_only=True)
         ws = wb.active
+        PedidoTemporal.objects.all().delete()
 
-        encabezados = {cell.value: idx for idx, cell in enumerate(ws[1])}
+        for i, fila in enumerate(ws.iter_rows(min_row=2, values_only=True)):
+            try:
+                cliente = str(fila[4]).strip() if fila[4] else ''
+                codigo = str(fila[1]).strip() if fila[1] else ''
+                lote = str(fila[19]).strip() if fila[19] else ''
+                cantidad = int(fila[2]) if fila[2] else 0
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            cliente = str(row[encabezados.get('cliente')]).strip()
-            codigo = str(row[encabezados.get('codigo')]).strip()
-            cantidad_pedida = row[encabezados.get('cantidad')]
-
-            if not cliente or not codigo or not cantidad_pedida:
+                if cliente and codigo and lote and cantidad:
+                    PedidoTemporal.objects.create(
+                        cliente=cliente,
+                        codigo=codigo,
+                        lote=lote,
+                        cantidad=cantidad
+                    )
+            except Exception as e:
                 continue
 
-            try:
-                producto = Producto.objects.get(cliente=cliente, codigo=codigo)
-                cantidad_caja = producto.cantidad_por_caja
-            except Producto.DoesNotExist:
-                # Buscar en la tabla de productos generales
-                try:
-                    producto_general = ProductoGeneral.objects.get(cliente=cliente, codigo=codigo)
-                    cantidad_caja = producto_general.cantidad_por_caja
-                    creado_en_galys = producto_general.galys
-                    if not creado_en_galys:
-                        codigos_sin_info.append((cliente, codigo, 'No creado en Galys'))
+        if accion == 'mostrar' or accion == 'descargar':
+            pedidos = PedidoTemporal.objects.all()
+            codigos_sin_info = set()
+
+            for pedido in pedidos:
+                clave = (pedido.cliente, pedido.codigo)
+                producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
+
+                if not producto:
+                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys='True').first()
+                    if general:
+                        cantidad_por_caja = int(general.cantidad_por_caja) if general.cantidad_por_caja else 0
+                    else:
+                        codigos_sin_info.add(clave)
                         continue
-                except ProductoGeneral.DoesNotExist:
-                    codigos_sin_info.append((cliente, codigo, 'No encontrado en ninguna tabla'))
+                else:
+                    cantidad_por_caja = producto.cantidad_por_caja
+
+                if not cantidad_por_caja:
+                    codigos_sin_info.add(clave)
                     continue
 
-            if not cantidad_caja:
-                codigos_sin_info.append((cliente, codigo, 'Sin cantidad por caja'))
-                continue
+                unidades_sueltas = pedido.cantidad % cantidad_por_caja
+                if unidades_sueltas <= 0:
+                    continue
 
-            # Calcular unidades sueltas (lo que no es múltiplo de la caja)
-            unidades_sueltas = cantidad_pedida % cantidad_caja
+                tipo_ubicacion = producto.tipo_ubicacion if producto else 'UDC320'
+                unidades_por_batea = producto.unidades_por_batea if producto and producto.unidades_por_batea else 135
+                porcentaje = (unidades_sueltas % unidades_por_batea) / unidades_por_batea * 100 if unidades_por_batea else 0
+                bateas = math.ceil(unidades_sueltas / unidades_por_batea) if unidades_por_batea else 0
 
-            if unidades_sueltas > 0:
-                resultados.append((cliente, codigo, unidades_sueltas))
+                resultados.append((pedido.cliente, pedido.codigo, unidades_sueltas, pedido.lote, round(porcentaje)))
+                total_unidades += unidades_sueltas
+                porcentaje_total += porcentaje
 
-        if 'descargar' in request.POST:
-            wb = Workbook()
-            ws = wb.active
-            ws.append(['Cliente', 'Código', 'Unidades a reponer'])
-            for fila in resultados:
-                ws.append(fila)
+                if tipo_ubicacion in bateas_necesarias:
+                    bateas_necesarias[tipo_ubicacion] += bateas
 
-            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
-            wb.save(response)
-            return response
+            cantidad_productos = len(resultados)
+            porcentaje_promedio = round(porcentaje_total / cantidad_productos, 2) if cantidad_productos > 0 else 0
+
+            if accion == 'descargar':
+                wb = Workbook()
+                ws = wb.active
+                ws.append(['Cliente', 'Código', 'Lote', 'Cantidad a reponer'])
+                for fila in resultados:
+                    ws.append([fila[0], fila[1], fila[3], fila[2]])
+
+                response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
+                wb.save(response)
+                return response
+
+    else:
+        resultados = []
+        codigos_sin_info = []
+        total_unidades = 0
+        porcentaje_promedio = 0
+        bateas_necesarias = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
 
     return render(request, 'reposicion_reactiva.html', {
         'resultados': resultados,
-        'codigos_sin_info': codigos_sin_info
+        'total_unidades': total_unidades,
+        'cantidad_productos': len(resultados),
+        'bateas_necesarias': bateas_necesarias,
+        'porcentaje_promedio': porcentaje_promedio,
     })
 
 def cargar_productos_generales(request):
@@ -595,10 +638,13 @@ def cargar_productos_generales(request):
         df = pd.read_excel(archivo)
 
         for _, row in df.iterrows():
-            cliente = str(row.get('ProCliCodigo')).strip()
-            codigo = str(row.get('ProCodigo')).strip()
-            galys = str(row.get('ProGalys')).strip().upper() == 'VERDADERO'
+            cliente = str(row.get('ProCliCodigo')).strip() if row.get('ProCliCodigo') else ''
+            codigo = str(row.get('ProCodigo')).strip() if row.get('ProCodigo') else ''
             cantidad_caja = row.get('ProPacking')
+
+            # Conversión más flexible para Galys
+            valor = str(row.get('ProGalys')).strip().lower() if row.get('ProGalys') else ''
+            galys = valor in ['verdadero', 'true', 'sí', 'si']
 
             if cliente and codigo:
                 ProductoGeneral.objects.update_or_create(
