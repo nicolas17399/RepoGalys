@@ -533,104 +533,122 @@ def reposicion_reactiva(request):
     total_unidades = 0
     bateas_necesarias = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
     porcentaje_total = 0
-    porcentaje_promedio = 0
 
     if request.method == 'POST':
-        archivo = request.FILES.get('archivo')
         accion = request.POST.get('accion')
 
-        if not archivo:
-            messages.error(request, "No se seleccionó un archivo.")
-            return redirect('reposicion_reactiva')
-
-        wb = load_workbook(filename=archivo, data_only=True)
-        ws = wb.active
-        PedidoTemporal.objects.all().delete()
-
-        for i, fila in enumerate(ws.iter_rows(min_row=2, values_only=True)):
-            try:
-                cliente = str(fila[4]).strip() if fila[4] else ''
-                codigo = str(fila[1]).strip() if fila[1] else ''
-                lote = str(fila[19]).strip() if fila[19] else ''
-                cantidad = int(fila[2]) if fila[2] else 0
-
-                if cliente and codigo and lote and cantidad:
-                    PedidoTemporal.objects.create(
-                        cliente=cliente,
-                        codigo=codigo,
-                        lote=lote,
-                        cantidad=cantidad
-                    )
-            except Exception as e:
-                continue
-
-        if accion == 'mostrar' or accion == 'descargar':
+        if accion == 'mostrar':
             pedidos = PedidoTemporal.objects.all()
-            codigos_sin_info = set()
+            
+            acumulador = defaultdict(int)
+            total_unidades = 0
 
             for pedido in pedidos:
-                clave = (pedido.cliente, pedido.codigo)
                 producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
 
                 if not producto:
-                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys='True').first()
-                    if general:
-                        cantidad_por_caja = int(general.cantidad_por_caja) if general.cantidad_por_caja else 0
-                    else:
-                        codigos_sin_info.add(clave)
+                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys=True).first()
+                    if not general:
                         continue
+                    cantidad_por_caja = general.cantidad_por_caja or 1
                 else:
-                    cantidad_por_caja = producto.cantidad_por_caja
-
-                if not cantidad_por_caja:
-                    codigos_sin_info.add(clave)
-                    continue
+                    cantidad_por_caja = producto.cantidad_por_caja or 1
 
                 unidades_sueltas = pedido.cantidad % cantidad_por_caja
                 if unidades_sueltas <= 0:
                     continue
 
-                tipo_ubicacion = producto.tipo_ubicacion if producto else 'UDC320'
-                unidades_por_batea = producto.unidades_por_batea if producto and producto.unidades_por_batea else 135
-                porcentaje = (unidades_sueltas % unidades_por_batea) / unidades_por_batea * 100 if unidades_por_batea else 0
-                bateas = math.ceil(unidades_sueltas / unidades_por_batea) if unidades_por_batea else 0
-
-                resultados.append((pedido.cliente, pedido.codigo, unidades_sueltas, pedido.lote, round(porcentaje)))
+                clave = (pedido.cliente, pedido.codigo, pedido.lote)
+                acumulador[clave] += unidades_sueltas
                 total_unidades += unidades_sueltas
-                porcentaje_total += porcentaje
 
-                if tipo_ubicacion in bateas_necesarias:
-                    bateas_necesarias[tipo_ubicacion] += bateas
+                resultados = [(cliente, codigo, lote, cantidad) for (cliente, codigo, lote), cantidad in acumulador.items()]
 
-            cantidad_productos = len(resultados)
-            porcentaje_promedio = round(porcentaje_total / cantidad_productos, 2) if cantidad_productos > 0 else 0
+                if producto:
+                    tipo = producto.tipo_ubicacion.title() if producto.tipo_ubicacion else "UDC320"
+                    uds_batea = producto.unidades_por_batea or 1
+                else:
+                    tipo = "UDC320"
+                    uds_batea = 156
 
-            if accion == 'descargar':
-                wb = Workbook()
-                ws = wb.active
-                ws.append(['Cliente', 'Código', 'Lote', 'Cantidad a reponer'])
-                for fila in resultados:
-                    ws.append([fila[0], fila[1], fila[3], fila[2]])
+                bateas = math.ceil(unidades_sueltas / uds_batea)
 
-                response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
-                wb.save(response)
-                return response
+                if tipo in bateas_necesarias:
+                    bateas_necesarias[tipo] += bateas
 
-    else:
-        resultados = []
-        codigos_sin_info = []
-        total_unidades = 0
-        porcentaje_promedio = 0
-        bateas_necesarias = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
+                porcentaje_total += (unidades_sueltas % uds_batea) / uds_batea * 100
 
-    return render(request, 'reposicion_reactiva.html', {
-        'resultados': resultados,
-        'total_unidades': total_unidades,
-        'cantidad_productos': len(resultados),
-        'bateas_necesarias': bateas_necesarias,
-        'porcentaje_promedio': porcentaje_promedio,
-    })
+            porcentaje_estimado = round(porcentaje_total / len(resultados), 2) if resultados else 0
+
+            return render(request, 'reposicion_reactiva.html', {
+                'resultados': resultados,
+                'cantidad_productos': len(resultados),
+                'cantidad_unidades': total_unidades,
+                'bateas_necesarias': bateas_necesarias,
+                'porcentaje_estimado': porcentaje_estimado
+            })
+
+        elif accion == 'descargar':
+            pedidos = PedidoTemporal.objects.all()
+            wb = Workbook()
+            ws = wb.active
+            ws.append(['Cliente', 'Código', 'Cantidad','Lote'])
+
+            for pedido in pedidos:
+                producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
+                if not producto:
+                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys=True).first()
+                    if not general:
+                        continue
+                    cantidad_por_caja = general.cantidad_por_caja or 1
+                else:
+                    cantidad_por_caja = producto.cantidad_por_caja or 1
+
+                unidades_sueltas = pedido.cantidad % cantidad_por_caja
+                if unidades_sueltas <= 0:
+                    continue
+
+                ws.append([pedido.cliente, pedido.codigo, unidades_sueltas, pedido.lote])
+
+            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
+            wb.save(response)
+            return response
+
+        elif 'archivo' in request.FILES:
+            PedidoTemporal.objects.all().delete()
+            archivo = request.FILES['archivo']
+            wb = load_workbook(filename=archivo, data_only=True)
+            sheet = wb.active
+
+            for fila in sheet.iter_rows(min_row=2, values_only=True):
+                if not fila or all(cell is None for cell in fila):
+                    continue
+
+                try:
+                    ubicacion = str(fila[18]).strip().lower() if len(fila) > 18 and fila[18] else ''
+                    if ubicacion.startswith("galys") or ubicacion.startswith("cfr"):
+                        continue
+
+                    cliente = str(fila[4]).strip() if fila[4] else ''
+                    codigo = str(fila[1]).strip() if fila[1] else ''
+                    cantidad = int(fila[2]) if fila[2] else 0
+                    lote = str(fila[19]).strip() if len(fila) > 19 and fila[19] else ''
+
+                    if cliente and codigo and cantidad > 0:
+                        PedidoTemporal.objects.create(
+                            cliente=cliente,
+                            codigo=codigo,
+                            cantidad=cantidad,
+                            lote=lote
+                        )
+
+                except Exception as e:
+                    print("Error procesando fila:", fila, "->", e)
+                    continue
+
+    return render(request, 'reposicion_reactiva.html')
+
 
 def cargar_productos_generales(request):
     if request.method == 'POST' and request.FILES.get('archivo'):
