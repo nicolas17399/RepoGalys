@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>🛡️ Crear copia de seguridad</h2>
+<p>Elegí una opción:</p>
+
+<form method="post">
+  {% csrf_token %}
+  <button type="submit" name="accion" value="guardar">📁 Guardar en el servidor</button>
+  <button type="submit" name="accion" value="descargar">📥 Descargar copia</button>
+</form>
+
+{% if mensaje %}
+  <p style="margin-top: 20px; color: green;">{{ mensaje }}</p>
+{% endif %}
+{% endblock %}

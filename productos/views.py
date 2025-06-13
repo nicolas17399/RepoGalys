@@ -1,10 +1,10 @@
 
 import pandas as pd
 from django.shortcuts import render, redirect
-from .models import Producto, UbicacionCarrusel, ProductoGeneral,PedidoTemporal
+from .models import Producto, UbicacionCarrusel, ProductoGeneral,PedidoTemporal,ResultadoReactivo
 from .forms import ExcelUploadForm, ExcelUbicacionesForm
 from io import BytesIO
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, FileResponse
 from django.contrib import messages
 import os
 import shutil
@@ -14,39 +14,85 @@ from django.utils.safestring import mark_safe
 import math
 from openpyxl import Workbook, load_workbook
 from collections import Counter, defaultdict
-import openpyxl
+from django.db.models import Sum, F
 
-def subir_excel(request):
+def subir_excel(request): 
     if request.method == 'POST':
         form = ExcelUploadForm(request.POST, request.FILES)
         if form.is_valid():
             archivo = request.FILES['archivo']
-            df = pd.read_excel(archivo)
-            df.columns = df.columns.str.lower().str.strip()
+            nombre_archivo = archivo.name.lower()
 
-            if 'cliente_codigo' not in df.columns:
-                messages.error(request, "El archivo debe tener la columna 'cliente_codigo'.")
+            # Leer archivo CSV o Excel
+            try:
+                if nombre_archivo.endswith('.csv'):
+                    primera_linea = archivo.readline().decode('utf-8')
+                    archivo.seek(0)
+                    if primera_linea.strip().lower().startswith("sep="):
+                        df = pd.read_csv(archivo, sep=',', skiprows=1)
+                    else:
+                        df = pd.read_csv(archivo, sep=',')
+                else:
+                    df = pd.read_excel(archivo, engine='openpyxl')
+            except Exception as e:
+                messages.error(request, f"❌ Error al leer el archivo: {e}")
                 return redirect('subir_excel')
 
-            # Obtener todos los productos existentes
-            existentes = set(Producto.objects.values_list('cliente_codigo', flat=True))
+            # Mapeo externo → interno
+            renombres = {
+                'codarticulo': 'cliente_codigo',
+                'disponible_rack (sum)': 'stock_total',
+                'saldo_galys (sum)': 'stock_carrusel',
+            }
+
+            # Renombrar columnas robustamente (ignorar comillas, mayúsculas, espacios)
+            columnas_renombradas = {}
+            for col in df.columns:
+                normalizada = col.lower().strip().replace('"', '').replace("'", '')
+                if normalizada in renombres:
+                    columnas_renombradas[col] = renombres[normalizada]
+
+            df.rename(columns=columnas_renombradas, inplace=True)
+            df.columns = df.columns.str.lower().str.strip().str.replace('"', '').str.replace("'", '')
+
+            # Verificar existencia de cliente_codigo
+            if 'cliente_codigo' not in df.columns:
+                messages.error(request, "❌ El archivo debe tener la columna 'cliente_codigo'.")
+                return redirect('subir_excel')
+
+            df['cliente_codigo'] = df['cliente_codigo'].astype(str).str.strip().str.upper()
 
             nuevos = []
             actualizados = []
+            advertencias = []
 
             for _, row in df.iterrows():
-                cliente_codigo = str(row['cliente_codigo']).strip()
+                cliente_codigo = str(row['cliente_codigo']).strip().upper()
+                if not cliente_codigo:
+                    continue
 
                 datos = {}
                 for columna in df.columns:
-                    if columna != 'cliente_codigo' and not pd.isna(row[columna]):
+                    if (
+                        columna != 'cliente_codigo' and 
+                        columna in [f.name for f in Producto._meta.get_fields()] and 
+                        not pd.isna(row[columna])
+                    ):
                         datos[columna] = row[columna]
 
-                if cliente_codigo in existentes:
-                    Producto.objects.filter(cliente_codigo=cliente_codigo).update(**datos)
+                try:
+                    producto = Producto.objects.get(cliente_codigo=cliente_codigo)
+                    for campo, valor in datos.items():
+                        setattr(producto, campo, valor)
+                    producto.save()
                     actualizados.append(cliente_codigo)
-                else:
+
+                except Producto.DoesNotExist:
                     nuevos.append(Producto(cliente_codigo=cliente_codigo, **datos))
+
+                except Producto.MultipleObjectsReturned:
+                    advertencias.append(cliente_codigo)
+                    continue
 
             if nuevos:
                 Producto.objects.bulk_create(nuevos)
@@ -55,7 +101,9 @@ def subir_excel(request):
             if nuevos:
                 mensaje += f"Se crearon {len(nuevos)} productos nuevos. "
             if actualizados:
-                mensaje += f"Se actualizaron {len(actualizados)} productos existentes."
+                mensaje += f"Se actualizaron {len(actualizados)} productos existentes. "
+            if advertencias:
+                mensaje += f"⚠️ {len(advertencias)} códigos duplicados no fueron procesados: {', '.join(advertencias[:5])}..."
 
             messages.success(request, mensaje)
             return redirect('subir_excel')
@@ -63,7 +111,6 @@ def subir_excel(request):
         form = ExcelUploadForm()
 
     return render(request, 'subir_excel.html', {'form': form})
-
 
 def descargar_plantilla(request):
     columnas = [
@@ -87,20 +134,30 @@ def inicio(request):
     return render(request, 'inicio.html')
 
 def crear_backup(request):
-    # Calcular la raíz del proyecto
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     origen = os.path.join(base_dir, 'db.sqlite3')
-    print("🎯 Ejecutando función crear_backup")
-    # Si la carpeta backups está en la raíz del proyecto, esta línea es correcta:
-    backup_dir = os.path.join(base_dir, 'backups')
-    os.makedirs(backup_dir, exist_ok=True)
-
     timestamp = now().strftime("%Y%m%d_%H%M%S")
-    destino = os.path.join(backup_dir, f"backup_{timestamp}.sqlite3")
+    nombre_backup = f"backup_{timestamp}.sqlite3"
 
-    shutil.copy(origen, destino)
-    messages.success(request, f"Copia de seguridad creada: backup_{timestamp}.sqlite3")
-    return HttpResponseRedirect('/')
+    if request.method == 'POST':
+        accion = request.POST.get('accion')
+
+        if accion == 'guardar':
+            backup_dir = os.path.join(base_dir, 'backups')
+            os.makedirs(backup_dir, exist_ok=True)
+            destino = os.path.join(backup_dir, nombre_backup)
+            shutil.copy(origen, destino)
+            mensaje = f"✅ Copia guardada en el servidor: {nombre_backup}"
+            return render(request, 'backup.html', {'mensaje': mensaje})
+
+        elif accion == 'descargar':
+            destino_temporal = os.path.join(base_dir, 'temp_backup', nombre_backup)
+            os.makedirs(os.path.dirname(destino_temporal), exist_ok=True)
+            shutil.copy(origen, destino_temporal)
+            response = FileResponse(open(destino_temporal, 'rb'), as_attachment=True, filename=nombre_backup)
+            return response
+
+    return render(request, 'backup.html')
 
 def editar_producto(request):
     producto = None
@@ -356,23 +413,21 @@ def armar_reposicion(request):
             productos = productos.filter(cliente__in=clientes_seleccionados)
 
         metodo_ocupacion = request.POST.get('metodo_ocupacion', 'simple')
+        ajustar_porcentaje = request.POST.get('ajustar_porcentaje') == 'on'
+        filtro_minimo_cantidad = request.POST.get('filtro_minimo_cantidad')
+        minimo_unidades = int(filtro_minimo_cantidad) if filtro_minimo_cantidad else 0
 
-        # Porcentaje mínimo
-        porcentaje_opciones = ['75', '50', '25']
-        porcentaje_minimo = request.POST.get('min_ocupacion')
-        if porcentaje_minimo == 'otro':
-            porcentaje_minimo_valor = request.POST.get('min_ocupacion_otro')
+        porcentaje_minimo_raw = request.POST.get('min_ocupacion')
+        if porcentaje_minimo_raw == 'otro':
             try:
-                porcentaje_minimo = float(porcentaje_minimo_valor)
+                porcentaje_minimo = float(request.POST.get('min_ocupacion_otro', '0'))
             except:
                 porcentaje_minimo = 0
-        elif porcentaje_minimo in porcentaje_opciones:
-            porcentaje_minimo = float(porcentaje_minimo)
         else:
-            porcentaje_minimo = 0
+            porcentaje_minimo = float(porcentaje_minimo_raw or 0)
 
         resultados = []
-        batea_contador = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
+        batea_contador = {"SUELO": 0, "UDC170": 0, "UDC320": 0}
 
         for p in productos:
             try:
@@ -381,6 +436,7 @@ def armar_reposicion(request):
                 if dias_stock not in dias_seleccionados:
                     continue
 
+                # Calcular cantidad base
                 if p.stock_total < p.stock_max_carrusel - p.stock_carrusel:
                     cantidad = p.stock_total
                 else:
@@ -390,18 +446,40 @@ def armar_reposicion(request):
                 if cantidad <= 0:
                     continue
 
-                if metodo_ocupacion == 'ubicaciones':
-                    porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad)
-                else:
-                    porcentaje = calcular_ocupacion_simple(p, cantidad)
+                # Calcular % ocupación base
+                porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad)
 
-                if porcentaje < porcentaje_minimo:
-                    cantidad_alternativa = cantidad - p.cantidad_por_caja if p.cantidad_por_caja else cantidad
-                    if cantidad_alternativa > 0:
-                        nuevo_porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad_alternativa) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad_alternativa)
-                        if nuevo_porcentaje > porcentaje:
-                            cantidad = cantidad_alternativa
-                            porcentaje = nuevo_porcentaje
+                # --- 🔧 Ajustar si no cumple mínimo ---
+                if ajustar_porcentaje and porcentaje < porcentaje_minimo:
+                    mejor_cantidad = 0
+                    mejor_porcentaje = porcentaje
+                    paso = p.cantidad_por_caja if tipo_altura == "SUELO" and p.cantidad_por_caja else 10
+                    cantidad_reducida = cantidad
+
+                    while cantidad_reducida >= paso:
+                        cantidad_reducida -= paso
+                        nuevo_porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad_reducida) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad_reducida)
+
+                        if nuevo_porcentaje >= porcentaje_minimo:
+                            mejor_cantidad = cantidad_reducida
+                            mejor_porcentaje = nuevo_porcentaje
+                            break
+
+                    if mejor_cantidad > 0:
+                        cantidad = mejor_cantidad
+                        porcentaje = mejor_porcentaje
+                    else:
+                        if tipo_altura == "SUELO" and p.cantidad_por_caja:
+                            if cantidad >= p.cantidad_por_caja:
+                                cantidad = (cantidad // p.cantidad_por_caja) * p.cantidad_por_caja
+                                porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad)
+                        else:
+                            if cantidad >= 10:
+                                cantidad = (cantidad // 10) * 10
+                                porcentaje = calcular_ocupacion_con_ubicaciones(p, cantidad) if metodo_ocupacion == 'ubicaciones' else calcular_ocupacion_simple(p, cantidad)
+
+                if cantidad < minimo_unidades:
+                    continue
 
                 tipo_altura = p.tipo_ubicacion
                 bateas_usadas = 0
@@ -413,7 +491,7 @@ def armar_reposicion(request):
                 if bateas_usadas > 0 and tipo_altura in batea_contador:
                     batea_contador[tipo_altura] += bateas_usadas
 
-                resultados.append((p.cliente, p.codigo, cantidad, round(porcentaje)))
+                resultados.append((p.cliente, p.codigo, cantidad, round(porcentaje), p.stock_carrusel))
             except:
                 continue
 
@@ -432,7 +510,7 @@ def armar_reposicion(request):
             return response
 
         dias_opciones = [0, 1, 2, 3, 4, 5]
-        alturas_opciones = ["Suelo", "UDC170", "UDC320"]
+        alturas_opciones = ["SUELO", "UDC170", "UDC320"]
         clientes_opciones = list(Producto.objects.exclude(cliente__isnull=True).exclude(cliente='').values_list('cliente', flat=True).distinct().order_by('cliente'))
 
         return render(request, 'armar_reposicion.html', {
@@ -448,14 +526,17 @@ def armar_reposicion(request):
             'cantidad_unidades': sum([r[2] for r in resultados]),
             'bateas_necesarias': batea_contador,
             'porcentaje_minimo': porcentaje_minimo,
-            'min_ocupacion': request.POST.get('min_ocupacion', '75'),
+            'min_ocupacion': porcentaje_minimo_raw,
             'min_ocupacion_otro': request.POST.get('min_ocupacion_otro', ''),
             'metodo_ocupacion': metodo_ocupacion,
             'promedio_ocupacion': promedio_ocupacion,
+            'ajustar_porcentaje': ajustar_porcentaje,
+            'filtro_minimo_cantidad': filtro_minimo_cantidad,
         })
 
+    # GET
     dias_opciones = [0, 1, 2, 3, 4, 5]
-    alturas_opciones = ["Suelo", "UDC170", "UDC320"]
+    alturas_opciones = ["SUELO", "UDC170", "UDC320"]
     clientes_opciones = list(Producto.objects.exclude(cliente__isnull=True).exclude(cliente='').values_list('cliente', flat=True).distinct().order_by('cliente'))
 
     return render(request, 'armar_reposicion.html', {
@@ -470,8 +551,9 @@ def armar_reposicion(request):
         'min_ocupacion': '75',
         'min_ocupacion_otro': '',
         'metodo_ocupacion': 'simple',
+        'ajustar_porcentaje': False,
+        'filtro_minimo_cantidad': '',
     })
-
 
 def calcular_ocupacion_simple(p, cantidad):
     """
@@ -530,124 +612,136 @@ def calcular_ocupacion_con_ubicaciones(p, cantidad, ubicaciones):
 
 def reposicion_reactiva(request):
     resultados = []
+    codigos_faltantes = []
     total_unidades = 0
-    bateas_necesarias = {"Suelo": 0, "UDC170": 0, "UDC320": 0}
+    bateas_necesarias = {"SUELO": 0, "UDC170": 0, "UDC320": 0}
     porcentaje_total = 0
 
-    if request.method == 'POST':
-        accion = request.POST.get('accion')
+    if request.method == 'POST' and 'archivo' in request.FILES:
+        PedidoTemporal.objects.all().delete()
+        archivo = request.FILES['archivo']
+        from openpyxl import load_workbook
+        wb = load_workbook(filename=archivo, data_only=True)
+        sheet = wb.active
 
-        if accion == 'mostrar':
-            pedidos = PedidoTemporal.objects.all()
-            
-            acumulador = defaultdict(int)
-            total_unidades = 0
+        for fila in sheet.iter_rows(min_row=2, values_only=True):
+            if not fila or all(cell is None for cell in fila):
+                continue
 
-            for pedido in pedidos:
-                producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
-
-                if not producto:
-                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys=True).first()
-                    if not general:
-                        continue
-                    cantidad_por_caja = general.cantidad_por_caja or 1
-                else:
-                    cantidad_por_caja = producto.cantidad_por_caja or 1
-
-                unidades_sueltas = pedido.cantidad % cantidad_por_caja
-                if unidades_sueltas <= 0:
+            try:
+                ubicacion = str(fila[18]).strip().lower() if len(fila) > 18 and fila[18] else ''
+                if ubicacion.startswith("galys") or ubicacion.startswith("cfr"):
                     continue
 
-                clave = (pedido.cliente, pedido.codigo, pedido.lote)
-                acumulador[clave] += unidades_sueltas
-                total_unidades += unidades_sueltas
+                cliente = str(fila[4]).strip() if fila[4] else ''
+                codigo = str(fila[1]).strip() if fila[1] else ''
+                cantidad = int(fila[2]) if fila[2] else 0
+                lote = str(fila[19]).strip() if len(fila) > 19 and fila[19] else ''
 
-                resultados = [(cliente, codigo, lote, cantidad) for (cliente, codigo, lote), cantidad in acumulador.items()]
+                if cliente and codigo and cantidad > 0:
+                    PedidoTemporal.objects.create(
+                        cliente=cliente,
+                        codigo=codigo,
+                        cantidad=cantidad,
+                        lote=lote
+                    )
 
-                if producto:
-                    tipo = producto.tipo_ubicacion.title() if producto.tipo_ubicacion else "UDC320"
-                    uds_batea = producto.unidades_por_batea or 1
-                else:
-                    tipo = "UDC320"
-                    uds_batea = 156
+            except Exception as e:
+                print("Error procesando fila:", fila, "->", e)
+                continue
 
-                bateas = math.ceil(unidades_sueltas / uds_batea)
+    pedidos = PedidoTemporal.objects.all()
+    acumulador = defaultdict(int)
 
-                if tipo in bateas_necesarias:
-                    bateas_necesarias[tipo] += bateas
+    for pedido in pedidos:
+        producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
 
-                porcentaje_total += (unidades_sueltas % uds_batea) / uds_batea * 100
+        if not producto:
+            general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys=True).first()
+            if not general:
+                codigos_faltantes.append((pedido.cliente, pedido.codigo, pedido.lote))
+                continue
+            cantidad_por_caja = general.cantidad_por_caja or 1
+            tipo = "UDC320"
+            uds_batea = 156
+        else:
+            cantidad_por_caja = producto.cantidad_por_caja or 1
+            tipo = producto.tipo_ubicacion.title() if producto.tipo_ubicacion else "UDC320"
+            uds_batea = producto.unidades_por_batea or 1
 
-            porcentaje_estimado = round(porcentaje_total / len(resultados), 2) if resultados else 0
+        unidades_sueltas = pedido.cantidad % cantidad_por_caja
+        if unidades_sueltas <= 0:
+            continue
 
-            return render(request, 'reposicion_reactiva.html', {
-                'resultados': resultados,
-                'cantidad_productos': len(resultados),
-                'cantidad_unidades': total_unidades,
-                'bateas_necesarias': bateas_necesarias,
-                'porcentaje_estimado': porcentaje_estimado
-            })
+        clave = (pedido.cliente, pedido.codigo, pedido.lote)
+        acumulador[clave] += unidades_sueltas
+        total_unidades += unidades_sueltas
 
-        elif accion == 'descargar':
-            pedidos = PedidoTemporal.objects.all()
-            wb = Workbook()
-            ws = wb.active
-            ws.append(['Cliente', 'Código', 'Cantidad','Lote'])
+        bateas = math.ceil(unidades_sueltas / uds_batea)
+        if tipo in bateas_necesarias:
+            bateas_necesarias[tipo] += bateas
 
-            for pedido in pedidos:
-                producto = Producto.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo).first()
-                if not producto:
-                    general = ProductoGeneral.objects.filter(cliente=pedido.cliente, codigo=pedido.codigo, galys=True).first()
-                    if not general:
-                        continue
-                    cantidad_por_caja = general.cantidad_por_caja or 1
-                else:
-                    cantidad_por_caja = producto.cantidad_por_caja or 1
+        porcentaje_total += (unidades_sueltas % uds_batea) / uds_batea * 100
 
-                unidades_sueltas = pedido.cantidad % cantidad_por_caja
-                if unidades_sueltas <= 0:
-                    continue
+    resultados = [(cliente, codigo, lote, cantidad) for (cliente, codigo, lote), cantidad in acumulador.items()]
+    porcentaje_estimado = round(porcentaje_total / len(resultados), 2) if resultados else 0
 
-                ws.append([pedido.cliente, pedido.codigo, unidades_sueltas, pedido.lote])
+    # Crear archivo de reposicion
+    wb_reposicion = Workbook()
+    ws = wb_reposicion.active
+    ws.append(['Cliente', 'Código', 'Lote', 'Cantidad'])
+    for fila in resultados:
+        ws.append(fila)
+    output_reposicion = BytesIO()
+    wb_reposicion.save(output_reposicion)
+    filename_reactiva = f"reposicion_reactiva_{timestamp}.xlsx"
+    filepath_reactiva = f"/mnt/data/{filename_reactiva}"
+    with open(filepath_reactiva, 'wb') as f:
+        f.write(output_reposicion.getvalue())
 
-            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
-            wb.save(response)
-            return response
+    request.session['reposicion_reactiva_excel'] = filename_reactiva
+    # Crear archivo de códigos faltantes
+    wb_faltantes = Workbook()
+    ws_f = wb_faltantes.active
+    ws_f.append(['Cliente', 'Código', 'Lote'])
+    for fila in codigos_faltantes:
+        ws_f.append(fila)
+    output_faltantes = BytesIO()
+    wb_faltantes.save(output_faltantes)
+    request.session['codigos_faltantes_excel'] = output_faltantes.getvalue()
 
-        elif 'archivo' in request.FILES:
-            PedidoTemporal.objects.all().delete()
-            archivo = request.FILES['archivo']
-            wb = load_workbook(filename=archivo, data_only=True)
-            sheet = wb.active
+    return render(request, 'reposicion_reactiva.html', {
+        'resultados': resultados,
+        'cantidad_productos': len(resultados),
+        'cantidad_unidades': total_unidades,
+        'bateas_necesarias': bateas_necesarias,
+        'porcentaje_estimado': porcentaje_estimado,
+        'hay_faltantes': len(codigos_faltantes) > 0
+    })
 
-            for fila in sheet.iter_rows(min_row=2, values_only=True):
-                if not fila or all(cell is None for cell in fila):
-                    continue
 
-                try:
-                    ubicacion = str(fila[18]).strip().lower() if len(fila) > 18 and fila[18] else ''
-                    if ubicacion.startswith("galys") or ubicacion.startswith("cfr"):
-                        continue
+def descargar_reposicion_reactiva(request):
+    contenido = request.session.get('reposicion_reactiva_excel')
+    if contenido:
+        response = HttpResponse(
+            contenido,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename="reposicion_reactiva.xlsx"'
+        return response
+    return HttpResponse("No hay archivo para descargar.")
 
-                    cliente = str(fila[4]).strip() if fila[4] else ''
-                    codigo = str(fila[1]).strip() if fila[1] else ''
-                    cantidad = int(fila[2]) if fila[2] else 0
-                    lote = str(fila[19]).strip() if len(fila) > 19 and fila[19] else ''
 
-                    if cliente and codigo and cantidad > 0:
-                        PedidoTemporal.objects.create(
-                            cliente=cliente,
-                            codigo=codigo,
-                            cantidad=cantidad,
-                            lote=lote
-                        )
-
-                except Exception as e:
-                    print("Error procesando fila:", fila, "->", e)
-                    continue
-
-    return render(request, 'reposicion_reactiva.html')
+def descargar_codigos_faltantes(request):
+    contenido = request.session.get('codigos_faltantes_excel')
+    if contenido:
+        response = HttpResponse(
+            contenido,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename="codigos_faltantes.xlsx"'
+        return response
+    return HttpResponse("No hay archivo para descargar.")
 
 
 def cargar_productos_generales(request):
@@ -678,3 +772,68 @@ def cargar_productos_generales(request):
         return redirect('inicio')
 
     return render(request, 'cargar_productos_generales.html')
+
+def comparar_cantidades(request):
+    resultados = []
+
+    if request.GET:  # Solo procesar si se presiona "Mostrar"
+        ocultar_ceros = request.GET.get('ocultar_ceros') == '1'
+        solo_sobrestock = request.GET.get('solo_sobrestock') == '1'
+
+        productos = Producto.objects.exclude(cliente_codigo__isnull=True).exclude(cliente_codigo='')
+
+        for p in productos:
+            articulo = (p.cliente_codigo or "").strip().upper()
+            ubicaciones = UbicacionCarrusel.objects.all()
+
+            total_stock = 0
+            bateas_ocupadas = 0
+
+            for u in ubicaciones:
+                articulo_ubi = (u.articulo or "").strip().upper()
+                if articulo_ubi == articulo:
+                    total_stock += u.stock or 0
+                    bateas_ocupadas += 1
+
+            diferencia = (p.stock_carrusel or 0) - total_stock
+            stock_max = p.stock_max_carrusel or 0
+            max_bateas = p.cantidad_max_bateas or 0
+
+            fila = {
+                'articulo': p.cliente_codigo,
+                'cantidad_producto': p.stock_carrusel or 0,
+                'cantidad_ubicaciones': total_stock,
+                'diferencia': diferencia,
+                'stock_max': stock_max,
+                'max_bateas': max_bateas,
+                'bateas_ocupadas': bateas_ocupadas,
+                'stock_excedido': total_stock > stock_max,
+                'bateas_excedidas': bateas_ocupadas > max_bateas
+            }
+
+            resultados.append(fila)
+
+        # Filtro: ocultar productos con todos los valores en cero
+        if ocultar_ceros:
+            resultados = [
+                r for r in resultados
+                if any([
+                    r['cantidad_producto'],
+                    r['cantidad_ubicaciones'],
+                    r['diferencia'],
+                    r['stock_max'],
+                    r['max_bateas'],
+                    r['bateas_ocupadas']
+                ])
+            ]
+
+        # Filtro: solo mostrar productos con sobrestock
+        if solo_sobrestock:
+            resultados = [r for r in resultados if r['cantidad_ubicaciones'] > r['stock_max']]
+
+        resultados = sorted(resultados, key=lambda x: x['diferencia'], reverse=True)
+
+    return render(request, 'comparar_cantidades.html', {
+        'resultados': resultados,
+        'request': request
+    })

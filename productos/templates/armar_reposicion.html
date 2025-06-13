@@ -26,7 +26,7 @@
 
     <!-- Alturas -->
     <div>
-      <strong>Altura:</strong><br>
+      <strong>Batea:</strong><br>
       {% for alt in alturas_opciones %}
         <label><input type="checkbox" name="alturas" value="{{ alt }}" {% if alt in alturas_seleccionadas %}checked{% endif %}> {{ alt }}</label>
       {% endfor %}
@@ -51,6 +51,7 @@
       <label><input type="radio" name="min_ocupacion" value="otro" {% if min_ocupacion_otro %}checked{% endif %}> Otro:</label>
       <input type="number" name="min_ocupacion_otro" value="{{ min_ocupacion_otro|default_if_none:'' }}" min="1" max="100">
     </div>
+
     <!-- Método de cálculo de ocupación -->
     <div>
       <strong>Método de cálculo de ocupación:</strong><br>
@@ -59,6 +60,26 @@
     </div>
   </div>
 
+  <!-- ✅ Filtros adicionales en una misma fila -->
+  <div style="display: flex; gap: 40px; margin-bottom: 20px;">
+    <!-- Filtro ajustar cantidades -->
+    <div>
+      <strong>Ajustar cantidades si no se cumple mínimo:</strong><br>
+      <label>
+        <input type="checkbox" name="ajustar_porcentaje" {% if ajustar_porcentaje %}checked{% endif %}>
+        Reducir hasta 100% y redondear a múltiplo de 10
+      </label>
+    </div>
+
+    <!-- ❗ Filtro para excluir resultados con cantidades pequeñas -->
+    <div style="margin-bottom: 20px;">
+      <strong>Excluir productos con cantidad menor a:</strong><br>
+      <label><input type="radio" name="filtro_minimo_cantidad" value="0" {% if filtro_minimo_cantidad == '0' or not filtro_minimo_cantidad %}checked{% endif %}> Incluir todos</label><br>
+      <label><input type="radio" name="filtro_minimo_cantidad" value="10" {% if filtro_minimo_cantidad == '10' %}checked{% endif %}> 10 unidades</label><br>
+      <label><input type="radio" name="filtro_minimo_cantidad" value="20" {% if filtro_minimo_cantidad == '20' %}checked{% endif %}> 20 unidades</label><br>
+      <label><input type="radio" name="filtro_minimo_cantidad" value="30" {% if filtro_minimo_cantidad == '30' %}checked{% endif %}> 30 unidades</label>
+    </div>  
+  </div>
   <!-- Botones -->
   <button type="submit" name="accion" value="mostrar">Mostrar</button>
   <button type="submit" name="accion" value="descargar">Descargar Excel</button>
@@ -80,6 +101,7 @@
         <th>Código</th>
         <th>Cantidad a reponer</th>
         <th>% Ocupación</th>
+        <th>Stock actual</th>
       </tr>
     </thead>
     <tbody>
@@ -89,6 +111,7 @@
           <td>{{ fila.1 }}</td>
           <td>{{ fila.2 }}</td>
           <td>{{ fila.3 }}%</td>
+          <td>{{ fila.4 }}</td>
         </tr>
       {% endfor %}
     </tbody>

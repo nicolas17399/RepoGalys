@@ -2,40 +2,66 @@
 {% load static %}
 
 {% block content %}
-<h2>⚙️ Reposición Reactiva desde Excel</h2>
+<h2>📦 Reposición Reactiva desde Pedidos</h2>
 
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
-  <label for="archivo">Seleccionar archivo de pedidos (.xlsx):</label>
+  <label><strong>Subir archivo de pedidos (.xlsx):</strong></label>
   <input type="file" name="archivo" required>
-  <br><br>
   <button type="submit" name="accion" value="mostrar">Mostrar</button>
-  <button type="submit" name="accion" value="descargar">Descargar Excel</button>
 </form>
 
-{% if resumen %}
-  <h4>📊 Resumen</h4>
-  <ul>
-    <li><strong>Total de productos:</strong> {{ resumen.total_productos }}</li>
-    <li><strong>Total de unidades:</strong> {{ resumen.total_unidades }}</li>
-    <li><strong>Bateas necesarias:</strong>
-      Suelo: {{ resumen.bateas.Suelo|default:"0" }},
-      UDC170: {{ resumen.bateas.UDC170|default:"0" }},
-      UDC320: {{ resumen.bateas.UDC320|default:"0" }}
-    </li>
-    <li><strong>Porcentaje promedio de ocupación estimado:</strong> {{ resumen.porcentaje_ocupacion }}%</li>
-  </ul>
+<br>
+
+{% if codigos_faltantes %}
+  <div style="background-color: #fdd; padding: 10px; border: 1px solid red;">
+    ⚠️ Se encontraron productos que no están creados en Galys. Verifique el archivo descargable.
+  </div>
+  <br>
 {% endif %}
 
+<!-- Botones de descarga siempre visibles -->
+<form method="post" style="display: inline;">
+  {% csrf_token %}
+  <button type="submit" name="accion" value="descargar_validos">Descargar productos válidos</button>
+</form>
+
+<form method="post" style="display: inline;">
+  {% csrf_token %}
+  <button type="submit" name="accion" value="descargar_faltantes">Descargar productos faltantes</button>
+</form>
+
+<br><br>
+
 {% if resultados %}
-  <h4>📋 Detalles de la reposición sugerida</h4>
+  <h4>
+    {{ cantidad_productos }} productos encontrados.
+    Total unidades: {{ cantidad_unidades }}.
+    Bateas necesarias → Suelo: {{ bateas_necesarias.Suelo|default:"0" }},
+    UDC170: {{ bateas_necesarias.UDC170|default:"0" }},
+    UDC320: {{ bateas_necesarias.UDC320|default:"0" }}.
+    Promedio estimado ocupación: {{ porcentaje_estimado }}%
+  </h4>
+
+  {% if hay_faltantes %}
+    <p style="color: orange;">🟡 Se encontraron productos que deben ser creados manualmente. Puede descargarlos debajo.</p>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" name="accion" value="descargar_validos">📥 Descargar productos válidos</button>
+    <button type="submit" name="accion" value="descargar_faltantes" {% if not hay_faltantes %}disabled{% endif %}>
+      📥 Descargar productos faltantes
+    </button>
+  </form>
+
   <table border="1" cellpadding="5" cellspacing="0">
     <thead>
       <tr>
         <th>Cliente</th>
         <th>Código</th>
-        <th>Cantidad a reponer</th>
         <th>Lote</th>
+        <th>Cantidad</th>
       </tr>
     </thead>
     <tbody>

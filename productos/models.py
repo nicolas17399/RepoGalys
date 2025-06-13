@@ -105,6 +105,14 @@ class PedidoTemporal(models.Model):
     def __str__(self):
         return f"{self.cliente} - {self.codigo} - {self.cantidad}"
 
+class ResultadoReactivo(models.Model):
+    cliente = models.CharField(max_length=50)
+    codigo = models.CharField(max_length=50)
+    lote = models.CharField(max_length=100, blank=True, null=True)
+    cantidad = models.IntegerField()
+    es_valido = models.BooleanField(default=True)  # True: se puede reponer, False: requiere creación
+    creado_el = models.DateTimeField(auto_now_add=True)
+
 class ProductoGeneral(models.Model):
     cliente = models.CharField(max_length=100)
     codigo = models.CharField(max_length=100)

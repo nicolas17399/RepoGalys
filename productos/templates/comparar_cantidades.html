@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>🔍 Comparar cantidades por artículo</h2>
+<p>Este reporte identifica diferencias.</p>
+
+<form method="get" style="margin-bottom: 15px;">
+  <label>
+    <input type="checkbox" name="ocultar_ceros" value="1" {% if request.GET.ocultar_ceros %}checked{% endif %}>
+    Ocultar productos sin stock ni bateas
+  </label><br>
+  <label>
+    <input type="checkbox" name="solo_sobrestock" value="1" {% if request.GET.solo_sobrestock %}checked{% endif %}>
+    Mostrar solo artículos con sobrestock
+  </label><br>
+  <button type="submit">🔍 Mostrar</button>
+</form>
+
+{% if resultados %}
+  <h4>{{ resultados|length }} artículos comparados:</h4>
+  <table border="1" cellpadding="5">
+    <thead>
+      <tr>
+        <th>Artículo</th>
+        <th>Cantidad (Producto)</th>
+        <th>Cantidad (Ubicaciones)</th>
+        <th>Diferencia</th>
+        <th>Stock Máximo</th>
+        <th>Bateas (Máx / Usadas)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in resultados %}
+        <tr>
+          <td>{{ r.articulo }}</td>
+          <td>{{ r.cantidad_producto }}</td>
+          <td>{{ r.cantidad_ubicaciones }}</td>
+          <td>{{ r.diferencia }}</td>
+          <td style="background-color: {% if r.stock_excedido %}#ffcccc{% else %}#e0ffe0{% endif %};">
+            {{ r.stock_max }}
+          </td>
+          <td style="background-color: {% if r.bateas_excedidas %}#ffcccc{% else %}#e0ffe0{% endif %};">
+            {{ r.max_bateas }} / {{ r.bateas_ocupadas }}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>Presioná "Mostrar" para generar el análisis.</p>
+{% endif %}
+{% endblock %}
